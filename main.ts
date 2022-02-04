@@ -79,13 +79,17 @@ class Timestamper {
 	}
 
 	startBounce(timeToRound: number) {
+		console.log("start bounce at "+this.getTimestamp()+" after "+timeToRound+" ms")
 		window.clearInterval(this.intervalId);
-		this.intervalId = window.setInterval(()=>this.bounce(), timeToRound);
+		this.intervalId = window.setInterval(()=>this.bounceIntervalEvent(), timeToRound);
 		this.plugin.registerInterval(this.intervalId);
 	}
 
-	bounce() {
-		window.clearInterval(this.intervalId); // clear the old timer
+	bounceIntervalEvent() {
+		if (this.intervalId != null) {
+			window.clearInterval(this.intervalId);
+			this.intervalId = null;
+		}
 
 		const coeff = 1000 * 60 * this.intervalMinutes;
 		const date = new Date();  //or use any other date
@@ -101,10 +105,17 @@ class Timestamper {
 	}
 
 	startNormal() {
+		console.log("start normal at "+this.getTimestamp());
+
 		this.insertTimestamp();
 
+		if (this.intervalId != null) {
+			window.clearInterval(this.intervalId);
+			this.intervalId = null;
+		}
+
 		// schedule to keep going
-		this.intervalId = window.setInterval(()=>this.insertTimestamp(), this.intervalMinutes*60*1000);
+		this.intervalId = window.setInterval(()=>this.normalIntervalEvent(), this.intervalMinutes*60*1000);
 		this.plugin.registerInterval(this.intervalId);
 	}
 
@@ -133,7 +144,10 @@ class Timestamper {
 			+".md"
 	}
 
-	insertTimestamp() {
+	normalIntervalEvent() {
+		console.log("normal event "+this.getTimestamp());
+		this.insertTimestamp();
+
 		const coeff = 1000 * 60 * this.intervalMinutes;
 		const date = new Date();  //or use any other date
 		const rounded = new Date(Math.ceil(date.getTime() / coeff) * coeff)
@@ -142,10 +156,12 @@ class Timestamper {
 		if (ms < 55000)	{ // if more than 5 seconds off set a bounce
 			this.startBounce(ms);
 		}
+	}
 
-		const currentView = this.plugin.app.workspace.activeLeaf.view;
-		if (currentView instanceof MarkdownView) {
-			const markdownView = currentView as MarkdownView;
+	insertTimestamp() {
+		const activeLeaf = this.plugin.app.workspace.activeLeaf;
+		if (activeLeaf != null && activeLeaf.view != null && activeLeaf.view instanceof MarkdownView) {
+			const markdownView = activeLeaf.view as MarkdownView;
 			if (markdownView.file.name == this.getDailyFilename()) {
 				let move = false;
 				if (markdownView.editor.getCursor().line == markdownView.editor.lastLine()) {
