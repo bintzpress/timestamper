@@ -1,138 +1,111 @@
-import { App, MarkdownView, Notice, Plugin, PluginManifest, PluginSettingTab, Setting } from 'obsidian';
+import { App, MarkdownView, Plugin, PluginManifest } from 'obsidian';
 
-// Remember to rename these classes and interfaces!
+function noLongerIdle(timestamper: Timestamper) {
+	// check if active note is a daily log
+	const activeLeaf = timestamper.plugin.app.workspace.activeLeaf;
+	if (activeLeaf != null && activeLeaf.view != null && activeLeaf.view instanceof MarkdownView) {
+		const markdownView = activeLeaf.view as MarkdownView;
+		if (timestamper.verifyDailyLog(markdownView)) {
+			const now = new Date();
+			let refreshRequired = false;
 
-interface TimestamperPluginSettings {
-	intervalMinutes: string;
-}
+			if (now.getTime() - timestamper.keyUpDateTime.getTime() > 30000) {
+				// haven't typed for more than a minute
+				if (!timestamper.ended) { // add an end time
+					timestamper.insertTimestamp(markdownView,">", timestamper.keyUpDateTime, false);
+					timestamper.ended = true;
+					timestamper.started = false;
+					refreshRequired = true;
+				}
+			}
 
-const DEFAULT_SETTINGS: TimestamperPluginSettings = {
-	intervalMinutes: '30',
+			// if not started then start
+			if (!timestamper.started) {
+				timestamper.insertTimestamp(markdownView, "##", now, true);
+				timestamper.started = true;
+				timestamper.ended = false;
+				refreshRequired = true;
+			}
+
+			if (refreshRequired) {
+				markdownView.editor.refresh();
+			}
+			timestamper.keyUpDateTime = now;
+		}	
+	}
 }
 
 export default class TimestamperPlugin extends Plugin {
-	settings: TimestamperPluginSettings;
 	timestamper: Timestamper;
 
 	constructor(app:App, manifest: PluginManifest) {
 		super(app, manifest)
-		this.timestamper = new Timestamper(this, 0);
+		this.timestamper = new Timestamper(this);
 	}
 
 	async onload() {
-		await this.loadSettings();
-
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new TimestamperSettingTab(this.app, this));
-
+		window.addEventListener('keyup', noLongerIdle.bind(null, this.timestamper));
 	}
 
 	onunload() {
-
-	}
-
-	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-		const parsed = parseInt(this.settings.intervalMinutes);
-		this.timestamper.setIntervalMinutes(parsed); // get the timer going at the saved interval
-	}
-
-	async saveSettings() {
-		await this.saveData(this.settings);
+		window.removeEventListener('keyup', noLongerIdle.bind(null, this.timestamper));
+		window.clearInterval(this.timestamper.intervalId);
 	}
 }
 
 class Timestamper {
 	plugin: TimestamperPlugin;
-	private intervalMinutes: number;
-	private intervalId: number;
+	intervalId: number;
+	started:boolean;
+	ended:boolean;
+	keyUpDateTime: Date;
 
-	constructor(plugin: TimestamperPlugin, intervalMinutes: number) {
+	constructor(plugin: TimestamperPlugin) {
 		this.plugin = plugin;
-		this.intervalId = null;
-		this.setIntervalMinutes(intervalMinutes);
-	}
-
-	getIntervalMinutes(): number {
-		return this.intervalMinutes;
-	}
-
-	setIntervalMinutes(intervalMinutes:number) {
-		this.intervalMinutes = intervalMinutes;
-		if (intervalMinutes > 0) {			
-			const coeff = 1000 * 60 * this.intervalMinutes;
-			const date = new Date();  //or use any other date
-			const rounded = new Date(Math.ceil(date.getTime() / coeff) * coeff)
-
-			const ms = rounded.getTime() - date.getTime();
-			if (ms < 55000) {
-				this.startBounce(ms);
-			} else {
-				this.startNormal();
-			}
-		} else {
-			if (this.intervalId != null) {
-				window.clearInterval(this.intervalId); // clear the interval if invalid
-				this.intervalId = null;
-			}
-		}
-	}
-
-	startBounce(timeToRound: number) {
-		console.log("start bounce at "+this.getTimestamp()+" after "+timeToRound+" ms")
-		window.clearInterval(this.intervalId);
-		this.intervalId = window.setInterval(()=>this.bounceIntervalEvent(), timeToRound);
+		this.intervalId = window.setInterval(()=>this.idleCheck(), 10000);
 		this.plugin.registerInterval(this.intervalId);
+
+		this.started = false;
+		this.ended = false;
+		this.keyUpDateTime = new Date();
 	}
 
-	bounceIntervalEvent() {
-		if (this.intervalId != null) {
-			window.clearInterval(this.intervalId);
-			this.intervalId = null;
-		}
-
-		const coeff = 1000 * 60 * this.intervalMinutes;
-		const date = new Date();  //or use any other date
-		const rounded = new Date(Math.ceil(date.getTime() / coeff) * coeff)
-
-		const ms = rounded.getTime() - date.getTime();
-
-		if (ms < 55000) {
-			this.startBounce(ms);
-		} else {
-			this.startNormal();
-		}
-	}
-
-	startNormal() {
-		console.log("start normal at "+this.getTimestamp());
-
-		this.insertTimestamp();
-
-		if (this.intervalId != null) {
-			window.clearInterval(this.intervalId);
-			this.intervalId = null;
-		}
-
-		// schedule to keep going
-		this.intervalId = window.setInterval(()=>this.normalIntervalEvent(), this.intervalMinutes*60*1000);
-		this.plugin.registerInterval(this.intervalId);
-	}
-
-	getTimestamp() {
+	idleCheck() {
 		const d = new Date();
-		let hours = d.getHours();
+		console.log("Running idle check at "+d.toLocaleString());
+
+		const activeLeaf = this.plugin.app.workspace.activeLeaf;
+		if (activeLeaf != null && activeLeaf.view != null && activeLeaf.view instanceof MarkdownView) {
+			const markdownView = activeLeaf.view as MarkdownView;
+			if (this.verifyDailyLog(markdownView)) {
+				const now = new Date();
+				if (now.getTime() - this.keyUpDateTime.getTime() > 30000) {
+					if (!this.ended) { // add an end time since now idle
+						this.insertTimestamp(markdownView,">", this.keyUpDateTime, false);
+						this.ended = true;
+						this.started = false;
+						markdownView.editor.refresh();
+					}
+				}
+			}
+		}
+	}
+
+	getTimestamp(dateTime:Date) {
+		let hours = dateTime.getHours();
 		let suffix = "AM"
-		if (hours > 12) {
+		if (hours == 12) {
+			suffix = "PM";
+		} else if (hours > 12) {
 			hours = hours - 12;
 			suffix = "PM";
 		}
 
-		return d.getFullYear()+"-"
-			+(d.getMonth()+1).toString().padStart(2, '0')
-			+"-"+d.getDate().toString().padStart(2, '0')
+		return dateTime.getFullYear()+"-"
+			+(dateTime.getMonth()+1).toString().padStart(2, '0')
+			+"-"+dateTime.getDate().toString().padStart(2, '0')
 			+" "+hours.toString().padStart(2, '0')
-			+":"+d.getMinutes().toString().padStart(2, '0')
+			+":"+dateTime.getMinutes().toString().padStart(2, '0')
 			+" "+suffix
 	}
 
@@ -144,84 +117,38 @@ class Timestamper {
 			+".md"
 	}
 
-	normalIntervalEvent() {
-		console.log("normal event "+this.getTimestamp());
-		this.insertTimestamp();
-
-		const coeff = 1000 * 60 * this.intervalMinutes;
-		const date = new Date();  //or use any other date
-		const rounded = new Date(Math.ceil(date.getTime() / coeff) * coeff)
-
-		const ms = rounded.getTime() - date.getTime();
-		if (ms < 55000)	{ // if more than 5 seconds off set a bounce
-			this.startBounce(ms);
-		}
-	}
-
-	insertTimestamp() {
-		const activeLeaf = this.plugin.app.workspace.activeLeaf;
-		if (activeLeaf != null && activeLeaf.view != null && activeLeaf.view instanceof MarkdownView) {
-			const markdownView = activeLeaf.view as MarkdownView;
-			if (markdownView.file.name == this.getDailyFilename()) {
-				let move = false;
-				if (markdownView.editor.getCursor().line == markdownView.editor.lastLine()) {
-					move = true;
+	verifyDailyLog(markdownView: MarkdownView): boolean {
+		if (markdownView.file.name == this.getDailyFilename()) {
+			if (markdownView.editor.lastLine() > 2) { 	
+				const line0 = markdownView.editor.getLine(0);
+				const line1 = markdownView.editor.getLine(1);
+				if (line0 == '---' && line1.match(`^noteType: *"Daily Note" *$`)) {
+					return true;
 				}
-
-				const currentLine = markdownView.editor.getLine(markdownView.editor.lastLine());
-				if (currentLine == "") {
-					markdownView.editor.setLine(markdownView.editor.lastLine(), "\n");
-				} else {
-					markdownView.editor.setLine(markdownView.editor.lastLine(), currentLine+"\n\n");
-				}
-				markdownView.editor.setLine(markdownView.editor.lastLine(), "> "+this.getTimestamp()+"\n");
-				markdownView.editor.setLine(markdownView.editor.lastLine(), "\n");
-
-				if (move) {
-					markdownView.editor.setCursor(markdownView.editor.lastLine());
-				}
-
-				markdownView.editor.refresh();
 			}
 		}
-	}
-}
-
-class TimestamperSettingTab extends PluginSettingTab {
-	plugin: TimestamperPlugin;
-
-	constructor(app: App, plugin: TimestamperPlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
+		return false;
 	}
 
-	display(): void {
-		const {containerEl} = this;
+	insertTimestamp(markdownView:MarkdownView, prefix:string, dateTime:Date, after:boolean) {
+		let move = false;
+		if (markdownView.editor.getCursor().line == markdownView.editor.lastLine()) {
+			move = true;
+		}
 
-		containerEl.empty();
+		const currentLine = markdownView.editor.getLine(markdownView.editor.lastLine());
+		if (after) {
+			markdownView.editor.setLine(markdownView.editor.lastLine(), prefix+" "+this.getTimestamp(dateTime)+"\n");
+			markdownView.editor.setLine(markdownView.editor.lastLine(), "\n");				
+			markdownView.editor.setLine(markdownView.editor.lastLine(), currentLine);
+		} else {
+			markdownView.editor.setLine(markdownView.editor.lastLine(), currentLine+"\n\n");
+			markdownView.editor.setLine(markdownView.editor.lastLine(), prefix+" "+this.getTimestamp(dateTime)+"\n");
+			markdownView.editor.setLine(markdownView.editor.lastLine(), "\n");
+		}
 
-		containerEl.createEl('h2', {text: 'General Settings'});
-
-		new Setting(containerEl)
-			.setName('Timestamp Interval')
-			.setDesc('Time interval at which to attempt to insert a timestamp')
-			.addDropdown(dropDown => {
-				dropDown.addOption('1', '1 minute');
-				dropDown.addOption('5', '5 minutes');
-				dropDown.addOption('15', '15 minutes');
-				dropDown.addOption('30', '30 minutes');
-				dropDown.addOption('60', '60 minutes');
-				dropDown.setValue(this.plugin.settings.intervalMinutes)
-				dropDown.onChange(async (value) => {
-					const parsed = parseInt(value, 10);
-					if (isNaN(parsed)) {
-						new Notice("Please specify a valid number.");
-					} else {
-						this.plugin.timestamper.setIntervalMinutes(parsed);
-						this.plugin.settings.intervalMinutes = value;
-						await this.plugin.saveSettings();
-					}
-				});
-			})
+		if (move) {
+			markdownView.editor.setCursor(markdownView.editor.lastLine());
+		}
 	}
 }
