@@ -1,0 +1,10 @@
+{
+	"id": "timestamper",
+	"name": "Timestamper",
+	"version": "1.0.0",
+	"minAppVersion": "0.12.0",
+	"description": "This plugin inserts timestamps into current note at a regular interval.",
+	"author": "Brian Bintz",
+	"authorUrl": "https://github.com/bintzpress/timestamper",
+	"isDesktopOnly": false
+}
